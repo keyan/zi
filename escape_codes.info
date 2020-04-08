@@ -1,0 +1,96 @@
+######## ANSI/VT100/PC-TERM TERMINAL STANDARDS
+#
+# ANSI Standard (X3.64) Control Sequences for Video Terminals and Peripherals
+#
+# Most of the content of this comment is adapted from a table prepared by
+# Richard Shuford, based on a 1984 Byte article.  Terminfo correspondences
+# and discussion of some terminfo-related issues have been added.
+#
+# The table is a complete list of the defined ANSI X.364 control sequences.
+# In the main table, \E stands for an escape (\033) character, SPC for space.
+# Pn stands for a single numeric parameter to be inserted in decimal ASCII.
+# Ps stands for a list of such parameters separated by semicolons
+#
+#                                                   Default    Type
+# Sequence     Sequence                             Parameter   or
+# Mnemonic     Name              Sequence           Value      Mode   terminfo
+# -----------------------------------------------------------------------------
+# APC  Applicatn Program Command \E Fe               -         Delim  -
+# CBT  Cursor Backward Tab       \E [ Pn Z           1         eF     cbt
+# CCH  Cancel Previous Character \E T                -         -      -
+# CHA  Cursor Horzntal Absolute  \E [ Pn G           1         eF     hpa (1)
+# CHT  Cursor Horizontal Tab     \E [ Pn I           1         eF     tab (2)
+# CNL  Cursor Next Line          \E [ Pn E           1         eF     nel (3)
+# CPL  Cursor Preceding Line     \E [ Pn F           1         eF     -
+# CPR  Cursor Position Report    \E [ Pn ; Pn R      1, 1      -      -
+# CSI  Control Sequence Intro    \E [                -         Intro  -
+# CTC  Cursor Tab Control        \E [ Ps W           0         eF     -
+# CUB  Cursor Backward           \E [ Pn D           1         eF     cub
+# CUD  Cursor Down               \E [ Pn B           1         eF     cud
+# CUF  Cursor Forward            \E [ Pn C           1         eF     cuf
+# CUP  Cursor Position           \E [ Pn ; Pn H      1, 1      eF     cup (4)
+# CUU  Cursor Up                 \E [ Pn A           1         eF     cuu
+# CVT  Cursor Vertical Tab       \E [ Pn Y           -         eF     -
+# DA   Device Attributes         \E [ Pn c           0         -      -
+# DAQ  Define Area Qualification \E [ Ps o           0         -      -
+# DCH  Delete Character          \E [ Pn P           1         eF     dch
+# DCS  Device Control String     \E P                -         Delim  -
+# DL   Delete Line               \E [ Pn M           1         eF     dl
+# DMI  Disable Manual Input      \E \                -         Fs     -
+# DSR  Device Status Report      \E [ Ps n           0         -      -
+# EA   Erase in Area             \E [ Ps O           0         eF     -
+# ECH  Erase Character           \E [ Pn X           1         eF     ech
+# ED   Erase in Display          \E [ Ps J           0         eF     ed  (5)
+# EF   Erase in Field            \E [ Ps N           0         eF     -
+# EL   Erase in Line             \E [ Ps K           0         eF     el  (5)
+# EMI  Enable Manual Input       \E b                          Fs     -
+# EPA  End of Protected Area     \E W                -         -      -
+# ESA  End of Selected Area      \E G                -         -      -
+# FNT  Font Selection            \E [ Pn ; Pn SPC D  0, 0      FE     -
+# GSM  Graphic Size Modify       \E [ Pn ; Pn SPC B  100, 100  FE     -
+# GSS  Graphic Size Selection    \E [ Pn SPC C       none      FE     -
+# HPA  Horz Position Absolute    \E [ Pn `           1         FE     (1)
+# HPR  Horz Position Relative    \E [ Pn a           1         FE     (6)
+# HTJ  Horz Tab w/Justification  \E I                -         FE     (2)
+# HTS  Horizontal Tab Set        \E H                -         FE     hts
+# HVP  Horz & Vertical Position  \E [ Pn ; Pn f      1, 1      FE     (4)
+# ICH  Insert Character          \E [ Pn @           1         eF     ich
+# IL   Insert Line               \E [ Pn L           1         eF     il
+# IND  Index                     \E D                -         FE     -
+# INT  Interrupt                 \E a                -         Fs     -
+# JFY  Justify                   \E [ Ps SPC F       0         FE     -
+# MC   Media Copy                \E [ Ps i           0         -      -
+# MW   Message Waiting           \E U                -         -      -
+# NEL  Next Line                 \E E                -         FE     nel (3)
+# NP   Next Page                 \E [ Pn U           1         eF     -
+# OSC  Operating System Command  \E ]                -         Delim  -
+# PLD  Partial Line Down         \E K                -         FE     -
+# PLU  Partial Line Up           \E L                -         FE     -
+# PM   Privacy Message           \E ^                -         Delim  -
+# PP   Preceding Page            \E [ Pn V           1         eF     -
+# PU1  Private Use 1             \E Q                -         -      -
+# PU2  Private Use 2             \E R                -         -      -
+# QUAD Typographic Quadding      \E [ Ps SPC H       0         FE     -
+# REP  Repeat Char or Control    \E [ Pn b           1         -      rep
+# RI   Reverse Index             \E M                -         FE     -
+# RIS  Reset to Initial State    \E c                -         Fs     -
+# RM   Reset Mode                \E [ Ps l           none      -      -
+# SD   Scroll Down               \E [ Pn T           1         eF     rin
+# SEM  Select Edit Extent Mode   \E [ Ps Q           0         -      -
+# SGR  Select Graphic Rendition  \E [ Ps m           0         FE     sgr (7)
+# SL   Scroll Left               \E [ Pn SPC @       1         eF     -
+# SM   Select Mode               \E [ Ps h           none      -      -
+# SPA  Start of Protected Area   \E V                -         -      -
+# SPI  Spacing Increment         \E [ Pn ; Pn SPC G  none      FE     -
+# SR   Scroll Right              \E [ Pn SPC A       1         eF     -
+# SS2  Single Shift 2 (G2 set)   \E N                -         Intro  -
+# SS3  Single Shift 3 (G3 set)   \E O                -         Intro  -
+# SSA  Start of Selected Area    \E F                -         -      -
+# ST   String Terminator         \E \                -         Delim  -
+# STS  Set Transmit State        \E S                -         -      -
+# SU   Scroll Up                 \E [ Pn S           1         eF     indn
+# TBC  Tab Clear                 \E [ Ps g           0         FE     tbc
+# TSS  Thin Space Specification  \E [ Pn SC E        none      FE     -
+# VPA  Vert Position Absolute    \E [ Pn d           1         FE     vpa
+# VPR  Vert Position Relative    \E [ Pn e           1         FE     (8)
+# VTS  Vertical Tabulation Set   \E J                -         FE     -
