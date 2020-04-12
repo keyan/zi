@@ -4,8 +4,8 @@ import (
 	"bufio"
 	// "fmt"
 	"os"
-	// "unicode"
 	"runtime"
+	// "unicode"
 
 	"golang.org/x/sys/unix"
 )
@@ -33,7 +33,8 @@ const (
 )
 
 type State struct {
-	mode EditorMode
+	oldTermios *unix.Termios
+	mode       EditorMode
 }
 
 // enableRawMode puts fd into raw mode and returns the previous state of the terminal.
@@ -106,6 +107,13 @@ func readKeyPress(r *bufio.Reader) byte {
 func processKeyPresses(r *bufio.Reader, w *bufio.Writer, s *State) {
 	b := readKeyPress(r)
 
+	// Debugging code
+	// if unicode.IsControl(rune(b)) {
+	// 	fmt.Printf("%d\r\n", b)
+	// } else {
+	// 	fmt.Printf("%v (%c)\r\n", b, b)
+	// }
+
 	switch s.mode {
 	case normalMode:
 		processNormalModePress(w, b, s)
@@ -121,6 +129,7 @@ func processKeyPresses(r *bufio.Reader, w *bufio.Writer, s *State) {
 func processNormalModePress(w *bufio.Writer, b byte, s *State) {
 	switch b {
 	case ctrlPress('q'):
+		clearScreen(w)
 		runtime.Goexit()
 	case 'i':
 		s.mode = insertMode
@@ -129,7 +138,7 @@ func processNormalModePress(w *bufio.Writer, b byte, s *State) {
 
 func processInsertModePress(w *bufio.Writer, b byte, s *State) {
 	switch b {
-	case 'q':
+	case escapeChar:
 		s.mode = normalMode
 	}
 
@@ -143,21 +152,54 @@ func processCommandModePress(w *bufio.Writer, b byte, s *State) {
 
 }
 
-// refreshScreen clears the entire terminal display.
-func refreshScreen(w *bufio.Writer) {
-	// "Erase in Display", Ps == 2 indicates all of the display should be erased.
-	nn, err := w.Write([]byte{escapeChar, escapeSeqBegin, 2, 'J'})
-	if err != nil || nn != 4 {
-		panic(err)
+func drawRows(w *bufio.Writer) {
+	for i := 0; i < 24; i++ {
+		nn, err := w.Write([]byte("~\r\n"))
+		if err != nil || nn != 3 {
+			panic(err)
+		}
 	}
+	w.Flush()
+}
 
+// clearScreen clears the entire terminal display.
+func clearScreen(w *bufio.Writer) {
 	// "Cursor Position" to top left.
-	nn, err = w.Write([]byte{escapeChar, escapeSeqBegin, 'H'})
+	nn, err := w.Write([]byte{escapeChar, escapeSeqBegin, 'H'})
 	if err != nil || nn != 3 {
 		panic(err)
 	}
-
 	w.Flush()
+
+	// "Erase in Display", Ps == 2 indicates all of the display should be erased.
+	nn, err = w.Write([]byte{escapeChar, escapeSeqBegin, 2, 'J'})
+	if err != nil || nn != 4 {
+		panic(err)
+	}
+	w.Flush()
+	// Why doesn't this work on exit?
+	// fmt.Fprintf(w, "%c%c2J", escapeChar, escapeSeqBegin)
+}
+
+func refreshScreen(w *bufio.Writer) {
+	clearScreen(w)
+	drawRows(w)
+
+	// Move cursor back to top left.
+	nn, err := w.Write([]byte{escapeChar, escapeSeqBegin, 'H'})
+	if err != nil || nn != 3 {
+		panic(err)
+	}
+	w.Flush()
+}
+
+func exit(s *State) {
+	// Don't leave the terminal in raw mode on exit.
+	disableRawMode(int(os.Stdin.Fd()), s.oldTermios)
+
+	// runtime.Goexit() is used elsewhere, but calling that on the main goroutine
+	// means main() never returns. All other defers should come after this.
+	os.Exit(0)
 }
 
 func main() {
@@ -165,13 +207,10 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	// runtime.Goexit() is used elsewhere, but calling that on the main goroutine
-	// means main() never returns. All other defers should come after this.
-	defer os.Exit(0)
-	// Don't leave the terminal in raw mode on exit.
-	defer disableRawMode(int(os.Stdin.Fd()), oldTermios)
 
-	s := State{normalMode}
+	s := State{oldTermios: oldTermios, mode: normalMode}
+	defer exit(&s)
+
 	r := bufio.NewReader(os.Stdin)
 	w := bufio.NewWriter(os.Stdout)
 	for {
