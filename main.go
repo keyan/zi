@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	// "fmt"
+	"fmt"
 	"os"
 	"runtime"
 	// "unicode"
@@ -32,9 +32,11 @@ const (
 	commandMode
 )
 
-type State struct {
+type TermState struct {
 	oldTermios *unix.Termios
 	mode       EditorMode
+	r          *bufio.Reader
+	w          *bufio.Writer
 }
 
 // enableRawMode puts fd into raw mode and returns the previous state of the terminal.
@@ -89,23 +91,19 @@ func ctrlPress(char byte) byte {
 	return char & 0x1f
 }
 
+// readKeyPress keeps reading from r until a byte is read, then returns it.
 func readKeyPress(r *bufio.Reader) byte {
 	for b, err := r.ReadByte(); ; b, err = r.ReadByte() {
 		if err != nil {
 			continue
 		}
 		return b
-		// if unicode.IsControl(rune(b)) {
-		// 	fmt.Printf("%d\r\n", b)
-		// } else {
-		// 	fmt.Printf("%v (%c)\r\n", b, b)
-		// }
 	}
 }
 
 // runReadLoop begins the infinite main program loop, collecting and acting on keypresses.
-func processKeyPresses(r *bufio.Reader, w *bufio.Writer, s *State) {
-	b := readKeyPress(r)
+func processKeyPresses(ts *TermState) {
+	b := readKeyPress(ts.r)
 
 	// Debugging code
 	// if unicode.IsControl(rune(b)) {
@@ -114,50 +112,47 @@ func processKeyPresses(r *bufio.Reader, w *bufio.Writer, s *State) {
 	// 	fmt.Printf("%v (%c)\r\n", b, b)
 	// }
 
-	switch s.mode {
+	switch ts.mode {
 	case normalMode:
-		processNormalModePress(w, b, s)
+		processNormalModePress(ts, b)
 	case insertMode:
-		processInsertModePress(w, b, s)
+		processInsertModePress(ts, b)
 	case visualMode:
-		processVisualModePress(w, b, s)
+		processVisualModePress(ts, b)
 	case commandMode:
-		processCommandModePress(w, b, s)
+		processCommandModePress(ts, b)
 	}
 }
 
-func processNormalModePress(w *bufio.Writer, b byte, s *State) {
+func processNormalModePress(ts *TermState, b byte) {
 	switch b {
 	case ctrlPress('q'):
-		clearScreen(w)
+		clearScreen(ts.w)
 		runtime.Goexit()
 	case 'i':
-		s.mode = insertMode
+		ts.mode = insertMode
 	}
 }
 
-func processInsertModePress(w *bufio.Writer, b byte, s *State) {
+func processInsertModePress(ts *TermState, b byte) {
 	switch b {
 	case escapeChar:
-		s.mode = normalMode
+		ts.mode = normalMode
 	}
 
 }
 
-func processVisualModePress(w *bufio.Writer, b byte, s *State) {
+func processVisualModePress(ts *TermState, b byte) {
 
 }
 
-func processCommandModePress(w *bufio.Writer, b byte, s *State) {
+func processCommandModePress(ts *TermState, b byte) {
 
 }
 
 func drawRows(w *bufio.Writer) {
 	for i := 0; i < 24; i++ {
-		nn, err := w.Write([]byte("~\r\n"))
-		if err != nil || nn != 3 {
-			panic(err)
-		}
+		fmt.Fprintf(w, "~\r\n")
 	}
 	w.Flush()
 }
@@ -165,20 +160,12 @@ func drawRows(w *bufio.Writer) {
 // clearScreen clears the entire terminal display.
 func clearScreen(w *bufio.Writer) {
 	// "Cursor Position" to top left.
-	nn, err := w.Write([]byte{escapeChar, escapeSeqBegin, 'H'})
-	if err != nil || nn != 3 {
-		panic(err)
-	}
+	fmt.Fprintf(w, "%c%cH", escapeChar, escapeSeqBegin)
 	w.Flush()
 
 	// "Erase in Display", Ps == 2 indicates all of the display should be erased.
-	nn, err = w.Write([]byte{escapeChar, escapeSeqBegin, 2, 'J'})
-	if err != nil || nn != 4 {
-		panic(err)
-	}
+	fmt.Fprintf(w, "%c%c2J", escapeChar, escapeSeqBegin)
 	w.Flush()
-	// Why doesn't this work on exit?
-	// fmt.Fprintf(w, "%c%c2J", escapeChar, escapeSeqBegin)
 }
 
 func refreshScreen(w *bufio.Writer) {
@@ -186,16 +173,13 @@ func refreshScreen(w *bufio.Writer) {
 	drawRows(w)
 
 	// Move cursor back to top left.
-	nn, err := w.Write([]byte{escapeChar, escapeSeqBegin, 'H'})
-	if err != nil || nn != 3 {
-		panic(err)
-	}
+	fmt.Fprintf(w, "%c%cH", escapeChar, escapeSeqBegin)
 	w.Flush()
 }
 
-func exit(s *State) {
+func exit(ts *TermState) {
 	// Don't leave the terminal in raw mode on exit.
-	disableRawMode(int(os.Stdin.Fd()), s.oldTermios)
+	disableRawMode(int(os.Stdin.Fd()), ts.oldTermios)
 
 	// runtime.Goexit() is used elsewhere, but calling that on the main goroutine
 	// means main() never returns. All other defers should come after this.
@@ -208,13 +192,16 @@ func main() {
 		panic(err)
 	}
 
-	s := State{oldTermios: oldTermios, mode: normalMode}
-	defer exit(&s)
+	ts := TermState{
+		oldTermios: oldTermios,
+		mode:       normalMode,
+		r:          bufio.NewReader(os.Stdin),
+		w:          bufio.NewWriter(os.Stdout),
+	}
+	defer exit(&ts)
 
-	r := bufio.NewReader(os.Stdin)
-	w := bufio.NewWriter(os.Stdout)
 	for {
-		refreshScreen(w)
-		processKeyPresses(r, w, &s)
+		refreshScreen(ts.w)
+		processKeyPresses(&ts)
 	}
 }
