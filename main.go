@@ -40,6 +40,7 @@ type TermState struct {
 	mode       EditorMode
 	r          *bufio.Reader
 	w          *bufio.Writer
+	welcomed   bool
 	cursorX    int
 	cursorY    int
 }
@@ -135,6 +136,13 @@ func processNormalModePress(ts *TermState, b byte) {
 		runtime.Goexit()
 	case 'i':
 		ts.mode = insertMode
+	case 'h', 'j', 'k', 'l':
+		moveCursor(ts, b)
+	}
+}
+
+func moveCursor(ts *TermState, b byte) {
+	switch b {
 	case 'h':
 		if ts.cursorX > 0 {
 			ts.cursorX--
@@ -186,16 +194,17 @@ func writeWelcomeMsg(ts *TermState) {
 
 func drawRows(ts *TermState) {
 	for i := 0; i < int(ts.winSize.Row); i++ {
-		if i == (int(ts.winSize.Row) / 3) {
+		ts.w.WriteByte('~')
+		if !ts.welcomed && i == (int(ts.winSize.Row)/3) {
 			writeWelcomeMsg(ts)
-		} else {
-			ts.w.WriteByte('~')
+			ts.welcomed = true
 		}
-		ts.w.WriteString("\r\n")
 
 		// "Erase in Line", erase the line to the right of the cursor.
 		// TODO - not sure about this, maybe makes more sense to call clearScreen once.
 		fmt.Fprintf(ts.w, "%c%cK", escapeChar, escapeSeqBegin)
+
+		ts.w.WriteString("\r\n")
 	}
 
 	switch ts.mode {
