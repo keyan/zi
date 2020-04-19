@@ -10,16 +10,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const ziVersion = "0.0.1"
-
 const (
+	ziVersion = "0.0.1"
+
 	// ANSI escape code, 27 in decimal.
 	escapeChar = '\x1b'
 	// All ANSI escape sequences start with this char.
-	escapeSeqBegin = '['
-)
-
-const (
+	escapeSeqBegin    = '['
 	ioctlReadTermios  = unix.TIOCGETA // unix.TCGETS on linux
 	ioctlWriteTermios = unix.TIOCSETA // unix.TCSETS on linux
 )
@@ -43,6 +40,12 @@ type TermState struct {
 	welcomed   bool
 	cursorX    int
 	cursorY    int
+	numRows    int
+	rows       []erow
+}
+
+type erow struct {
+	text string
 }
 
 // enableRawMode puts fd into raw mode and returns the previous state of the terminal.
@@ -105,27 +108,13 @@ func readKeyPress(r *bufio.Reader) byte {
 	}
 }
 
-// runReadLoop begins the infinite main program loop, collecting and acting on keypresses.
-func processKeyPresses(ts *TermState) {
-	b := readKeyPress(ts.r)
+// clearScreen clears the entire terminal display, but doesn't flush the writer.
+func clearScreen(w *bufio.Writer) {
+	// "Cursor Position" to top left.
+	fmt.Fprintf(w, "%c%cH", escapeChar, escapeSeqBegin)
 
-	// Debugging code
-	// if unicode.IsControl(rune(b)) {
-	// 	fmt.Printf("%d\r\n", b)
-	// } else {
-	// 	fmt.Printf("%v (%c)\r\n", b, b)
-	// }
-
-	switch ts.mode {
-	case normalMode:
-		processNormalModePress(ts, b)
-	case insertMode:
-		processInsertModePress(ts, b)
-	case visualMode:
-		processVisualModePress(ts, b)
-	case commandMode:
-		processCommandModePress(ts, b)
-	}
+	// "Erase in Display", Ps == 2 indicates all of the display should be erased.
+	fmt.Fprintf(w, "%c%c2J", escapeChar, escapeSeqBegin)
 }
 
 func processNormalModePress(ts *TermState, b byte) {
@@ -178,8 +167,33 @@ func processCommandModePress(ts *TermState, b byte) {
 	panic("Command mode is not implemented")
 }
 
+// runReadLoop begins the infinite main program loop, collecting and acting on keypresses.
+func (ts *TermState) processKeyPresses() {
+	b := readKeyPress(ts.r)
+
+	// Debugging code
+	// if unicode.IsControl(rune(b)) {
+	// 	fmt.Printf("%d\r\n", b)
+	// } else {
+	// 	fmt.Printf("%v (%c)\r\n", b, b)
+	// }
+
+	switch ts.mode {
+	case normalMode:
+		processNormalModePress(ts, b)
+	case insertMode:
+		processInsertModePress(ts, b)
+	case visualMode:
+		processVisualModePress(ts, b)
+	case commandMode:
+		processCommandModePress(ts, b)
+	}
+}
+
 // writeWelcomeMsg writes a one-time welcome message to the writer.
-func writeWelcomeMsg(ts *TermState) {
+func (ts *TermState) writeWelcomeMsg() {
+	ts.welcomed = true
+
 	var width int
 
 	msg := fmt.Sprintf("zi -- version %v", ziVersion)
@@ -192,12 +206,11 @@ func writeWelcomeMsg(ts *TermState) {
 	fmt.Fprintf(ts.w, "%*s", width, msg)
 }
 
-func drawRows(ts *TermState) {
+func (ts *TermState) drawRows() {
 	for i := 0; i < int(ts.winSize.Row); i++ {
 		ts.w.WriteByte('~')
 		if !ts.welcomed && i == (int(ts.winSize.Row)/3) {
-			writeWelcomeMsg(ts)
-			ts.welcomed = true
+			ts.writeWelcomeMsg()
 		}
 
 		// "Erase in Line", erase the line to the right of the cursor.
@@ -215,17 +228,8 @@ func drawRows(ts *TermState) {
 	}
 }
 
-// clearScreen clears the entire terminal display, but doesn't flush the writer.
-func clearScreen(w *bufio.Writer) {
-	// "Cursor Position" to top left.
-	fmt.Fprintf(w, "%c%cH", escapeChar, escapeSeqBegin)
-
-	// "Erase in Display", Ps == 2 indicates all of the display should be erased.
-	fmt.Fprintf(w, "%c%c2J", escapeChar, escapeSeqBegin)
-}
-
 // refreshScreen
-func refreshScreen(ts *TermState) {
+func (ts *TermState) refreshScreen() {
 	// Do a single flush to term to improve perf.
 	defer ts.w.Flush()
 
@@ -234,15 +238,18 @@ func refreshScreen(ts *TermState) {
 	// Unhide cursor after redraw.
 	defer fmt.Fprintf(ts.w, "%c%c?25h", escapeChar, escapeSeqBegin)
 
-	drawRows(ts)
+	ts.drawRows()
 
 	// Move cursor to state pos.
 	fmt.Fprintf(ts.w, "%c%c%d;%dH", escapeChar,
 		escapeSeqBegin, ts.cursorY+1, ts.cursorX+1)
 }
 
+func (ts *TermState) openEditor() {
+}
+
 // exit should be called when program exiting/shutdown is initiated.
-func exit(ts *TermState) {
+func (ts *TermState) exit() {
 	// Don't leave the terminal in raw mode on exit.
 	disableRawMode(int(os.Stdin.Fd()), ts.oldTermios)
 
@@ -269,10 +276,12 @@ func main() {
 		r:          bufio.NewReader(os.Stdin),
 		w:          bufio.NewWriter(os.Stdout),
 	}
-	defer exit(&ts)
+	defer ts.exit()
+
+	ts.openEditor()
 
 	for {
-		refreshScreen(&ts)
-		processKeyPresses(&ts)
+		ts.refreshScreen()
+		ts.processKeyPresses()
 	}
 }
