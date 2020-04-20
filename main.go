@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -45,11 +46,12 @@ type TermState struct {
 	mode         editorMode    // Current editor modality (i.e. Normal/Insert/Command)
 	r            *bufio.Reader // Reader from Stdin to get user input
 	w            *bufio.Writer // Writer to Stdout to modify view
-	welcomed     bool          // true if intro msg has already been displayed, or should not be displayed
-	cursorX      int           // Current 0 index cursor position
-	cursorY      int           // Current 0 index cursor position
-	bufferRows   []string      // All contents of the file, one string per row
-	rowOffset    int           // The current row position of the editor window
+	logger       *log.Logger
+	welcomed     bool     // true if intro msg has already been displayed, or should not be displayed
+	cursorX      int      // Current 0 index cursor position
+	cursorY      int      // Current 0 index cursor position
+	bufferRows   []string // All contents of the file, one string per row
+	rowOffset    int      // The current row position of the editor window
 	lineNumWidth int
 	openFilename string
 }
@@ -152,7 +154,8 @@ func moveCursor(ts *TermState, b byte) {
 		}
 	case 'j':
 		// Reserve 1 row for status bar.
-		if ts.cursorY < int(ts.winSize.Row)-1 {
+		// if ts.cursorY < int(ts.winSize.Row)-1 {
+		if ts.cursorY < len(ts.bufferRows) {
 			ts.cursorY++
 		}
 	case 'k':
@@ -202,6 +205,17 @@ func (ts *TermState) processKeyPresses() {
 	}
 }
 
+// adjustScroll modifies the rowOffset and cursor positioning to handle window size and location
+// within the bufferRows.
+func (ts *TermState) adjustScroll() {
+	if ts.cursorY < ts.rowOffset {
+		ts.rowOffset = ts.cursorY
+	}
+	if ts.cursorY >= ts.rowOffset+int(ts.winSize.Row) {
+		ts.rowOffset = ts.cursorY - int(ts.winSize.Row)
+	}
+}
+
 // writeWelcomeMsg writes a one-time welcome message to the writer.
 func (ts *TermState) writeWelcomeMsg() {
 	ts.welcomed = true
@@ -240,7 +254,6 @@ func (ts *TermState) drawRows() {
 	clearScreen(ts.w)
 
 	// Keep track of line numbers and how much space needed to display them.
-	lineNum := 1
 	ts.lineNumWidth = len(strconv.Itoa(len(ts.bufferRows)))
 
 	for i := 0; i < int(ts.winSize.Row); i++ {
@@ -251,20 +264,19 @@ func (ts *TermState) drawRows() {
 		// Are we drawing text from the edit buffer?
 		case fileRow >= len(ts.bufferRows):
 			ts.w.WriteByte('~')
-			if !ts.welcomed && i == (int(ts.winSize.Row+1)/3) {
+			if !ts.welcomed && i == (int(ts.winSize.Row)/3) {
 				ts.writeWelcomeMsg()
 			}
 		default:
-			fmt.Fprintf(ts.w, "%s%*d%s ", colorCode(faint),
-				ts.lineNumWidth, lineNum, colorCode(reset))
-			// TODO handle truncation better
+			fmt.Fprintf(ts.w, "%s%*d%s ", colorCode(faint), ts.lineNumWidth,
+				fileRow+1, colorCode(reset))
+
+			// TODO Handle truncation, either with horizontal scroll or wrapping (harder).
 			chars := len(ts.bufferRows[fileRow])
 			if chars > allowColChars {
 				chars = allowColChars
 			}
 			ts.w.WriteString(ts.bufferRows[fileRow][:chars])
-
-			lineNum++
 		}
 
 		// "Erase in Line", erase the line to the right of the cursor.
@@ -283,6 +295,8 @@ func (ts *TermState) refreshScreen() {
 	// Do a single flush to term to improve perf.
 	defer ts.w.Flush()
 
+	ts.adjustScroll()
+
 	// Hide the cursor during updates to avoid flickering.
 	fmt.Fprintf(ts.w, "%c%c?25l", escapeChar, escapeSeqBegin)
 	// Unhide cursor after redraw.
@@ -290,9 +304,13 @@ func (ts *TermState) refreshScreen() {
 
 	ts.drawRows()
 
+	// Avoid cursorY == 0 to force two down movements to move a line.
+	yPos := ts.cursorY - ts.rowOffset
+	if ts.cursorY < 2 {
+		yPos++
+	}
 	// Move cursor to state pos.
-	fmt.Fprintf(ts.w, "%c%c%d;%dH", escapeChar,
-		escapeSeqBegin, ts.cursorY+1, ts.cursorX+1)
+	fmt.Fprintf(ts.w, "%c%c%d;%dH", escapeChar, escapeSeqBegin, yPos, ts.cursorX+1)
 }
 
 // openEditor looks for a filename cmdline arg, if one was provided it is opened and its contents
@@ -357,14 +375,25 @@ func main() {
 	ws.Row--
 	ws.Col--
 
+	// Log to a local file. Its hard to debug without this because the terminal is in raw mode.
+	// Use with: ts.logger.Printf(...)
+	f, err := os.OpenFile("zi.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		disableRawMode(int(os.Stdin.Fd()), oldTermios)
+		panic(err)
+	}
+	defer f.Close()
+	l := log.New(f, "", log.LstdFlags)
+
 	ts := TermState{
 		oldTermios: oldTermios,
 		winSize:    ws,
 		mode:       normalMode,
 		r:          bufio.NewReader(os.Stdin),
 		w:          bufio.NewWriter(os.Stdout),
+		logger:     l,
 		bufferRows: make([]string, 0),
-		// Min possible pos when considering number bar/~ signifiers.
+		// Min possible pos when considering number bar and ~ signifiers.
 		cursorX: 2,
 	}
 

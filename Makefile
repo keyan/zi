@@ -8,4 +8,4 @@ build:
 
 .PHONY: clean
 clean:
-	@rm -f ./zi ./main &> /dev/null
+	@rm -f ./zi ./main *.log .*swo .*swp &> /dev/null
