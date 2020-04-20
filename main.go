@@ -2,13 +2,15 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strconv"
 
 	"golang.org/x/sys/unix"
 )
+
+type color int
 
 const (
 	ziVersion = "0.0.1"
@@ -19,29 +21,37 @@ const (
 	escapeSeqBegin    = '['
 	ioctlReadTermios  = unix.TIOCGETA // unix.TCGETS on linux
 	ioctlWriteTermios = unix.TIOCSETA // unix.TCSETS on linux
+
+	// Colors
+	reset    color = 0
+	faint    color = 2
+	inverted color = 7
+	bgBlue   color = 44
 )
 
-type EditorMode int
+type editorMode int
 
 const (
-	_ EditorMode = iota
+	_ editorMode = iota
 	normalMode
 	insertMode
-	visualMode
 	commandMode
 )
 
 // TermState is a god-object containing the global editor state.
 type TermState struct {
-	oldTermios *unix.Termios // The Termios struct at application startup, zi reverts back to this on exit
-	winSize    *unix.Winsize // The terminal window size, computed once and not adjust based on signals
-	mode       EditorMode    // Current editor modality (i.e. Normal/Visual/Command)
-	r          *bufio.Reader // Reader from Stdin to get user input
-	w          *bufio.Writer // Writer to Stdout to modify view
-	welcomed   bool          // true is the welcome message has already been displayed, or should not be displayed
-	cursorX    int           // Current 0 index cursor position
-	cursorY    int           // Current 0 index cursor position
-	bufferRows []string      // All contents of the file, one element per row
+	oldTermios   *unix.Termios // The Termios struct at application startup, zi reverts back to this on exit
+	winSize      *unix.Winsize // The terminal window size, computed once and not adjust based on signals
+	mode         editorMode    // Current editor modality (i.e. Normal/Insert/Command)
+	r            *bufio.Reader // Reader from Stdin to get user input
+	w            *bufio.Writer // Writer to Stdout to modify view
+	welcomed     bool          // true if intro msg has already been displayed, or should not be displayed
+	cursorX      int           // Current 0 index cursor position
+	cursorY      int           // Current 0 index cursor position
+	bufferRows   []string      // All contents of the file, one string per row
+	rowOffset    int           // The current row position of the editor window
+	lineNumWidth int
+	openFilename string
 }
 
 // enableRawMode puts fd into raw mode and returns the previous state of the terminal.
@@ -94,6 +104,11 @@ func ctrlPress(char byte) byte {
 	return char & 0x1f
 }
 
+// colorCode returns an escape code string starting a color sequence.
+func colorCode(c color) string {
+	return fmt.Sprintf("%c%c%dm", escapeChar, escapeSeqBegin, c)
+}
+
 // readKeyPress keeps reading from r until a byte is read, then returns it.
 func readKeyPress(r *bufio.Reader) byte {
 	for b, err := r.ReadByte(); ; b, err = r.ReadByte() {
@@ -131,11 +146,13 @@ func processNormalModePress(ts *TermState, b byte) {
 func moveCursor(ts *TermState, b byte) {
 	switch b {
 	case 'h':
-		if ts.cursorX > 0 {
+		// Reserve 1 col for visual seperation of line nums.
+		if ts.cursorX > ts.lineNumWidth+1 {
 			ts.cursorX--
 		}
 	case 'j':
-		if ts.cursorY < int(ts.winSize.Row) {
+		// Reserve 1 row for status bar.
+		if ts.cursorY < int(ts.winSize.Row)-1 {
 			ts.cursorY++
 		}
 	case 'k':
@@ -157,12 +174,11 @@ func processInsertModePress(ts *TermState, b byte) {
 
 }
 
-func processVisualModePress(ts *TermState, b byte) {
-	ts.exit(errors.New("Visual mode is not implemented"))
-}
-
 func processCommandModePress(ts *TermState, b byte) {
-	ts.exit(errors.New("Command mode is not implemented"))
+	switch b {
+	case escapeChar:
+		ts.mode = normalMode
+	}
 }
 
 // runReadLoop begins the infinite main program loop, collecting and acting on keypresses.
@@ -181,8 +197,6 @@ func (ts *TermState) processKeyPresses() {
 		processNormalModePress(ts, b)
 	case insertMode:
 		processInsertModePress(ts, b)
-	case visualMode:
-		processVisualModePress(ts, b)
 	case commandMode:
 		processCommandModePress(ts, b)
 	}
@@ -204,25 +218,53 @@ func (ts *TermState) writeWelcomeMsg() {
 	fmt.Fprintf(ts.w, "%*s", width, msg)
 }
 
+// writeStatusBar writes the status bar at the bottom of the editor screen.
+func (ts *TermState) writeStatusBar() {
+	var c color
+	var mode string
+	switch ts.mode {
+	case normalMode:
+		c = inverted
+		mode = "NORMAL"
+	case insertMode:
+		c = bgBlue
+		mode = "INSERT"
+	}
+
+	msg := fmt.Sprintf("%s -- %s", mode, ts.openFilename)
+	fmt.Fprintf(ts.w, "%s%-*s%s", colorCode(c), int(ts.winSize.Col), msg, colorCode(reset))
+}
+
 func (ts *TermState) drawRows() {
 	// TODO - See below, does it make more sense to clear per line?
 	clearScreen(ts.w)
 
+	// Keep track of line numbers and how much space needed to display them.
+	lineNum := 1
+	ts.lineNumWidth = len(strconv.Itoa(len(ts.bufferRows)))
+
 	for i := 0; i < int(ts.winSize.Row); i++ {
+		allowColChars := int(ts.winSize.Col) - ts.lineNumWidth
+		fileRow := ts.rowOffset + i
+
 		switch {
 		// Are we drawing text from the edit buffer?
-		case i >= len(ts.bufferRows):
+		case fileRow >= len(ts.bufferRows):
 			ts.w.WriteByte('~')
 			if !ts.welcomed && i == (int(ts.winSize.Row+1)/3) {
 				ts.writeWelcomeMsg()
 			}
 		default:
+			fmt.Fprintf(ts.w, "%s%*d%s ", colorCode(faint),
+				ts.lineNumWidth, lineNum, colorCode(reset))
 			// TODO handle truncation better
-			chars := len(ts.bufferRows[i])
-			if chars > int(ts.winSize.Col) {
-				chars = int(ts.winSize.Col)
+			chars := len(ts.bufferRows[fileRow])
+			if chars > allowColChars {
+				chars = allowColChars
 			}
-			ts.w.WriteString(ts.bufferRows[i][:chars])
+			ts.w.WriteString(ts.bufferRows[fileRow][:chars])
+
+			lineNum++
 		}
 
 		// "Erase in Line", erase the line to the right of the cursor.
@@ -232,12 +274,7 @@ func (ts *TermState) drawRows() {
 		ts.w.WriteString("\r\n")
 	}
 
-	switch ts.mode {
-	case normalMode:
-		ts.w.WriteString("NORMAL")
-	case insertMode:
-		ts.w.WriteString("INSERT")
-	}
+	ts.writeStatusBar()
 }
 
 // refreshScreen clears the entier screen, draws the buffer content/placeholders/welcome message
@@ -267,8 +304,11 @@ func (ts *TermState) openEditor() error {
 	if len(os.Args) < 2 {
 		return nil
 	}
-	// content, err := ioutil.ReadFile(filename)
-	f, err := os.Open(os.Args[1])
+
+	filename := os.Args[1]
+	ts.openFilename = filename
+
+	f, err := os.Open(filename)
 	if err != nil {
 		return err
 	}
@@ -280,6 +320,10 @@ func (ts *TermState) openEditor() error {
 
 	// Don't display welcome when opening a file.
 	ts.welcomed = true
+	// Set number bar as width of largest line number.
+	ts.lineNumWidth = len(strconv.Itoa(len(ts.bufferRows)))
+	// Set cursor position to be beyond number bar.
+	ts.cursorX = ts.lineNumWidth + 1
 
 	return nil
 }
@@ -320,6 +364,8 @@ func main() {
 		r:          bufio.NewReader(os.Stdin),
 		w:          bufio.NewWriter(os.Stdout),
 		bufferRows: make([]string, 0),
+		// Min possible pos when considering number bar/~ signifiers.
+		cursorX: 2,
 	}
 
 	// Catch any unexpected panics. Normal exits should happen through ts.exit().
